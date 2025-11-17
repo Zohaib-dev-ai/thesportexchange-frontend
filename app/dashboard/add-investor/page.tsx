@@ -596,36 +596,6 @@ export default function AddInvestorPage() {
           </form>
         </div>
 
-        {/* Info Box */}
-        <div className="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-900/20">
-          <div className="flex gap-3">
-            <svg
-              className="h-5 w-5 flex-shrink-0 text-blue-600 dark:text-blue-400"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-            <div className="text-sm text-blue-800 dark:text-blue-300">
-              <p className="font-semibold">Connected to Database</p>
-              <p className="mt-1">
-                New investors will be saved to the database with:
-              </p>
-              <ul className="mt-2 list-inside list-disc space-y-1">
-                <li>Encrypted password with bcrypt</li>
-                <li>User account for investor login</li>
-                <li>Investment details and status tracking</li>
-                <li>Document upload (coming soon with cloud storage)</li>
-              </ul>
-            </div>
-          </div>
-        </div>
       </main>
     </div>
   );
