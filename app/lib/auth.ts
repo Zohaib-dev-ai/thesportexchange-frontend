@@ -44,7 +44,7 @@ export async function loginUser(credentials: LoginCredentials): Promise<AuthResp
 
     return {
       success: true,
-      token: `mock-token-${data.data.id}`, // Generate a mock token
+      token: data.data.token, // Use real JWT token from backend
       user: {
         id: data.data.id.toString(),
         email: data.data.email,
@@ -76,7 +76,7 @@ export async function loginInvestor(credentials: LoginCredentials): Promise<Auth
 
     return {
       success: true,
-      token: `mock-token-investor-${data.data.id}`, // Generate a mock token
+      token: data.data.token, // Use real JWT token from backend
       investor: {
         id: data.data.id.toString(),
         first_name: data.data.full_name,

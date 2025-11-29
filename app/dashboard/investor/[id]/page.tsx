@@ -4,16 +4,22 @@ import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
-import { isAuthenticated } from "../../../lib/auth";
+import { isAuthenticated, getAuthToken } from "../../../lib/auth";
 import { getApiUrl, getDocumentUrl } from "../../../lib/api";
+import InvestmentRequestsTable from "../../../components/InvestmentRequestsTable";
+import ReferralsTable from "../../../components/ReferralsTable";
 
-interface Document {
+interface Contract {
   id: number;
-  document_name: string;
-  document_url: string;
-  document_type: string;
-  file_size: number;
-  uploaded_at: string;
+  investor_id: number;
+  amount_of_money: number;
+  amount_of_coins: number;
+  coin_rate: number;
+  payment_status: string;
+  status: string;
+  investment_date: string;
+  created_at: string;
+  documents?: any[];
 }
 
 interface Investor {
@@ -26,8 +32,9 @@ interface Investor {
   amount_of_coins: number;
   investment_date: string;
   status: string;
+  payment?: string;
   notes: string;
-  documents?: Document[];
+  contracts?: Contract[];
 }
 
 export default function InvestorDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -40,21 +47,14 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
-  const [documents, setDocuments] = useState<File[]>([]);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [showAddDocumentModal, setShowAddDocumentModal] = useState(false);
-  const [newDocumentName, setNewDocumentName] = useState("");
-  const [newDocumentUrl, setNewDocumentUrl] = useState("");
-  const [uploadMethod, setUploadMethod] = useState<'file' | 'url'>('file');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [addingDocument, setAddingDocument] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [contracts, setContracts] = useState<Contract[]>([]);
   const router = useRouter();
 
   useEffect(() => {
@@ -62,17 +62,62 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
     
     // Check authentication using auth service
     if (!isAuthenticated()) {
-      router.push("/login");
+      router.push("/login-admin");
       return;
     }
 
     fetchInvestor();
+    fetchContracts();
   }, [resolvedParams.id, router]);
+
+  const formatCoins = (value: string | number) => {
+    if (!value && value !== 0) return '0';
+    const numericValue = typeof value === 'string' ? parseFloat(value) : value;
+    return isNaN(numericValue) ? '0' : numericValue.toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    });
+  };
+
+  const formatCurrency = (value: string | number) => {
+    if (!value && value !== 0) return '$0';
+    const numericValue = typeof value === 'string' ? parseFloat(value) : value;
+    return isNaN(numericValue) ? '$0' : `$${numericValue.toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2
+    })}`;
+  };
+
+  const formatCoinRate = (value: string | number) => {
+    if (!value && value !== 0) return '0.00000';
+    const numericValue = typeof value === 'string' ? parseFloat(value) : value;
+    return isNaN(numericValue) ? '0.00000' : numericValue.toFixed(5);
+  };
+
+  const getStatusBadgeStyle = (status: string) => {
+    switch (status?.toLowerCase()) {
+      case 'pending':
+        return 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30';
+      case 'contract sent':
+        return 'bg-blue-500/20 text-blue-400 border border-blue-500/30';
+      case 'signed':
+        return 'bg-green-500/20 text-green-400 border border-green-500/30';
+      case 'cancelled':
+        return 'bg-red-500/20 text-red-400 border border-red-500/30';
+      default:
+        return 'bg-gray-500/20 text-gray-400 border border-gray-500/30';
+    }
+  };
 
   const fetchInvestor = async () => {
     try {
       setLoading(true);
-      const response = await fetch(getApiUrl(`/api/investors/${resolvedParams.id}`));
+      const token = getAuthToken();
+      const headers: HeadersInit = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const response = await fetch(getApiUrl(`/api/investors/${resolvedParams.id}`), { headers });
       const data = await response.json();
 
       if (!response.ok || !data.success) {
@@ -89,6 +134,23 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
     }
   };
 
+  const fetchContracts = async () => {
+    try {
+      const token = getAuthToken();
+      const headers: HeadersInit = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const response = await fetch(getApiUrl(`/api/contracts/investor/${resolvedParams.id}`), { headers });
+      const data = await response.json();
+      if (data.success) {
+        setContracts(data.data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch contracts:', err);
+    }
+  };
+
   const handleEdit = () => {
     setIsEditing(true);
   };
@@ -96,21 +158,26 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
   const handleCancel = () => {
     setIsEditing(false);
     setEditedInvestor(investor);
-    setDocuments([]);
   };
 
   const handleSave = async () => {
     if (!editedInvestor) return;
 
-    try {
+      try {
       setSaving(true);
       setError("");
       
+      const token = getAuthToken();
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
       const response = await fetch(getApiUrl(`/api/investors/${resolvedParams.id}`), {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           full_name: editedInvestor.full_name,
           last_name: editedInvestor.last_name,
@@ -118,13 +185,11 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
           phone: editedInvestor.phone,
           amount_of_money: editedInvestor.amount_of_money,
           amount_of_coins: editedInvestor.amount_of_coins,
-          investment_date: editedInvestor.investment_date,
           status: editedInvestor.status,
+          payment: editedInvestor.payment,
           notes: editedInvestor.notes,
         }),
-      });
-
-      const data = await response.json();
+      });      const data = await response.json();
 
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Failed to update investor');
@@ -132,7 +197,6 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
 
       setInvestor(editedInvestor);
       setIsEditing(false);
-      setDocuments([]);
       setSuccessMessage('Changes saved successfully!');
       
       // Clear success message after 3 seconds
@@ -147,124 +211,6 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
   const handleInputChange = (field: keyof Investor, value: string | number) => {
     if (editedInvestor) {
       setEditedInvestor({ ...editedInvestor, [field]: value });
-    }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const newFiles = Array.from(e.target.files);
-      setDocuments(prev => [...prev, ...newFiles]);
-      e.target.value = '';
-    }
-  };
-
-  const handleRemoveFile = (index: number) => {
-    setDocuments(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleRemoveExistingDocument = async (docId: number) => {
-    if (!confirm('Are you sure you want to delete this document?')) return;
-    
-    try {
-      const response = await fetch(getApiUrl(`/api/investors/${resolvedParams.id}/documents?documentId=${docId}`), {
-        method: 'DELETE',
-      });
-
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to delete document');
-      }
-
-      // Refresh investor data to update documents list
-      fetchInvestor();
-      setSuccessMessage('Document deleted successfully');
-      setTimeout(() => setSuccessMessage(""), 3000);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete document');
-    }
-  };
-
-  const handleAddDocument = async () => {
-    // Validation
-    if (uploadMethod === 'file') {
-      if (!selectedFile) {
-        setError('Please select a file to upload');
-        return;
-      }
-    } else {
-      if (!newDocumentUrl) {
-        setError('Please provide a document URL');
-        return;
-      }
-      if (!newDocumentName) {
-        setError('Please provide a document name');
-        return;
-      }
-    }
-
-    try {
-      setAddingDocument(true);
-      let documentUrl = newDocumentUrl;
-      let documentName = newDocumentName;
-
-      // If uploading a file, upload it first
-      if (uploadMethod === 'file' && selectedFile) {
-        setUploading(true);
-        const formData = new FormData();
-        formData.append('file', selectedFile);
-
-        const uploadResponse = await fetch(getApiUrl('/api/upload'), {
-          method: 'POST',
-          body: formData,
-        });
-
-        const uploadData = await uploadResponse.json();
-
-        if (!uploadResponse.ok || !uploadData.success) {
-          throw new Error(uploadData.error || 'Failed to upload file');
-        }
-
-        documentUrl = uploadData.data.url;
-        documentName = uploadData.data.filename; // Use the original filename
-        setUploading(false);
-      }
-
-      // Now save the document record
-      const response = await fetch(getApiUrl(`/api/investors/${resolvedParams.id}/documents`), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          document_name: documentName || 'Untitled Document',
-          document_url: documentUrl,
-          document_type: uploadMethod === 'file' ? selectedFile?.type : 'external_url',
-          file_size: uploadMethod === 'file' ? selectedFile?.size : null,
-          uploaded_by: 1, // Admin user ID
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to add document');
-      }
-
-      setSuccessMessage('Document added successfully!');
-      setShowAddDocumentModal(false);
-      setNewDocumentName('');
-      setNewDocumentUrl('');
-      setSelectedFile(null);
-      setUploadMethod('file');
-      fetchInvestor();
-      
-      setTimeout(() => setSuccessMessage(""), 3000);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add document');
-    } finally {
-      setAddingDocument(false);
-      setUploading(false);
     }
   };
 
@@ -289,11 +235,16 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
 
     try {
       setChangingPassword(true);
+      const token = getAuthToken();
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
       const response = await fetch(getApiUrl(`/api/investors/${resolvedParams.id}/change-password`), {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({ newPassword }),
       });
 
@@ -321,8 +272,14 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
 
     try {
       setDeleting(true);
+      const token = getAuthToken();
+      const headers: HeadersInit = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
       const response = await fetch(getApiUrl(`/api/investors/${investor.id}`), {
         method: 'DELETE',
+        headers,
       });
 
       const data = await response.json();
@@ -350,7 +307,7 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-900">
+      <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-zinc-300 border-t-zinc-900 dark:border-zinc-700 dark:border-t-white"></div>
           <p className="mt-4 text-zinc-600 dark:text-zinc-400">Loading investor details...</p>
@@ -361,7 +318,7 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
 
   if (error || !investor || !editedInvestor) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-900">
+      <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
           <p className="text-red-600 dark:text-red-400">{error || 'Investor not found'}</p>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Redirecting to dashboard...</p>
@@ -374,8 +331,6 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case "Paid":
-        return "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400";
       case "Signed":
         return "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400";
       case "Pending":
@@ -428,7 +383,7 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
 
         {/* Investor Header */}
         <div className="mb-8 rounded-xl border border-zinc-200 p-8 shadow-sm dark:bg-zinc-800">
-          <div className="flex items-start justify-between">
+          <div className="flex items-start justify-between sm-block">
             <div>
               <h1 className="text-4xl font-bold dark:text-white">
                 {displayInvestor.full_name}
@@ -438,15 +393,22 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
               </p>
             </div>
             <div className="flex items-center gap-3">
-              <span
+              {/*<span
                 className={`rounded-full px-4 py-2 text-sm font-semibold ${getStatusColor(
                   displayInvestor.status
                 )}`}
               >
                 {displayInvestor.status}
-              </span>
+              </span>*/}
+
               {!isEditing ? (
                 <>
+                  <Link
+                    href={`/dashboard/contracts/new?investorId=${resolvedParams.id}`}
+                    className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-purple-700"
+                  >
+                    Add Contract
+                  </Link>
                   <button
                     onClick={handleEdit}
                     className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
@@ -484,7 +446,7 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
           <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             <div>
               <div className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                Full Name
+                First Name
               </div>
               {isEditing ? (
                 <input
@@ -520,9 +482,18 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
               <div className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
                 Email Address
               </div>
-              <div className="mt-1 text-base dark:text-white">
-                <div className="px-3 py-2 rounded-lg border border-zinc-200">{displayInvestor.email}</div>
-              </div>
+              {isEditing ? (
+                <input
+                  type="email"
+                  value={editedInvestor.email || ''}
+                  onChange={(e) => handleInputChange("email", e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-700 dark:text-white"
+                />
+              ) : (
+                <div className="mt-1 text-base dark:text-white">
+                  {displayInvestor.email || 'N/A'}
+                </div>
+              )}
             </div>
             <div>
               <div className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
@@ -541,64 +512,7 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
                 </div>
               )}
             </div>
-            <div>
-              <div className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                Amount of Money
-              </div>
-              {isEditing ? (
-                <input
-                  type="number"
-                  step="0.01"
-                  value={editedInvestor.amount_of_money}
-                  onChange={(e) => handleInputChange("amount_of_money", parseFloat(e.target.value) || 0)}
-                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-700 dark:text-white"
-                />
-              ) : (
-                <div className="mt-1 text-2xl font-bold dark:text-white">
-                  ${displayInvestor.amount_of_money.toLocaleString()}
-                </div>
-              )}
-            </div>
-            <div>
-              <div className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                Amount of Coins
-              </div>
-              {isEditing ? (
-                <input
-                  type="number"
-                  step="0.01"
-                  value={editedInvestor.amount_of_coins}
-                  onChange={(e) => handleInputChange("amount_of_coins", parseFloat(e.target.value) || 0)}
-                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-700 dark:text-white"
-                />
-              ) : (
-                <div className="mt-1 text-base dark:text-white">
-                  {displayInvestor.amount_of_coins.toLocaleString()}
-                </div>
-              )}
-            </div>
-            <div>
-              <div className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                Investment Date
-              </div>
-              {isEditing ? (
-                <input
-                  type="date"
-                  value={editedInvestor.investment_date ? new Date(editedInvestor.investment_date).toISOString().split('T')[0] : ''}
-                  onChange={(e) => handleInputChange("investment_date", e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-700 dark:text-white"
-                />
-              ) : (
-                <div className="mt-1 text-base dark:text-white">
-                  {displayInvestor.investment_date ? new Date(displayInvestor.investment_date).toLocaleDateString("en-US", {
-                    year: "numeric",
-                    month: "long",
-                    day: "numeric",
-                  }) : 'N/A'}
-                </div>
-              )}
-            </div>
-            <div>
+            {/*<div>
               <div className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
                 Status
               </div>
@@ -606,11 +520,10 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
                 <select
                   value={editedInvestor.status}
                   onChange={(e) => handleInputChange("status", e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-700 dark:text-white"
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-700 dark:text-white text-zinc-500"
                 >
                   <option value="Pending">Pending</option>
                   <option value="Signed">Signed</option>
-                  <option value="Paid">Paid</option>
                   <option value="Cancelled">Cancelled</option>
                 </select>
               ) : (
@@ -618,114 +531,182 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
                   {displayInvestor.status}
                 </div>
               )}
-            </div>
-            <div className="sm:col-span-3">
+            </div>*/}
+            <div>
               <div className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                Documents
+                Amount of Money
+              </div>
+              <div className="mt-1 text-2xl font-bold dark:text-white">
+                {formatCurrency(displayInvestor.amount_of_money)}
+              </div>
+            </div>
+            <div>
+              <div className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                Amount of Coins
+              </div>
+              <div className="mt-1 text-2xl font-bold dark:text-white">
+                {formatCoins(displayInvestor.amount_of_coins)}
+              </div>
+            </div>
+            <div>
+              <div className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                Creation Date
+              </div>
+              <div className="mt-1 text-base dark:text-white">
+                {displayInvestor.investment_date ? new Date(displayInvestor.investment_date).toLocaleDateString("en-US", {
+                  year: "numeric",
+                  month: "long",
+                  day: "numeric",
+                }) : 'N/A'}
+              </div>
+            </div>
+            <div>
+              <div className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                Notes
               </div>
               {isEditing ? (
-                <div className="mt-1 space-y-3">
-                  {/* Add Document Button */}
-                  <button
-                    type="button"
-                    onClick={() => setShowAddDocumentModal(true)}
-                    className="w-full flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-blue-300 bg-blue-50 px-4 py-6 transition-colors hover:border-blue-400 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:hover:border-blue-600 dark:hover:bg-blue-900/30"
-                  >
-                    <svg className="h-6 w-6 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                    </svg>
-                    <span className="font-medium text-blue-700 dark:text-blue-300">Add Document</span>
-                  </button>
-
-                  {/* Existing Documents */}
-                  {investor.documents && investor.documents.length > 0 && (
-                    <div>
-                      <p className="text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-2">Existing Documents:</p>
-                      {investor.documents.map((doc) => (
-                        <div
-                          key={`existing-${doc.id}`}
-                          className="flex items-center justify-between rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 mb-2 dark:border-zinc-700 dark:bg-zinc-800"
-                        >
-                          <div className="flex items-center gap-2">
-                            <svg className="h-5 w-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                            </svg>
-                            <div>
-                              <p className="text-xs font-medium text-zinc-900 dark:text-white">{doc.document_name}</p>
-                              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                                {doc.file_size ? `${(doc.file_size / 1024 / 1024).toFixed(2)} MB` : 'Size unknown'}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <a href={getDocumentUrl(doc.document_url)} target="_blank" rel="noopener noreferrer" className="rounded p-1 text-blue-600 hover:bg-blue-50 dark:text-blue-400">
-                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                              </svg>
-                            </a>
-                            <button type="button" onClick={() => handleRemoveExistingDocument(doc.id)} className="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400">
-                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                              </svg>
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <textarea
+                  value={editedInvestor.notes || ""}
+                  onChange={(e) => handleInputChange("notes", e.target.value)}
+                  rows={4}
+                  className="text-white w-full rounded-lg border border-zinc-200 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-700 dark:text-white mt-1"
+                  placeholder="Enter notes about this investor..."
+                />
               ) : (
-                <div className="mt-1">
-                  {investor.documents && investor.documents.length > 0 ? (
-                    <div className="space-y-2">
-                      {investor.documents.map((doc) => (
-                        <a
-                          key={doc.id}
-                          href={getDocumentUrl(doc.document_url)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-2 text-sm text-blue-600 hover:underline dark:text-blue-400"
-                        >
-                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                          {doc.document_name}
-                        </a>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-sm text-zinc-500 dark:text-zinc-400">No documents uploaded</div>
-                  )}
-                </div>
+                <p className="text-zinc-700 dark:text-zinc-300 mt-1">
+                  {displayInvestor.notes || "No notes available for this investor."}
+                </p>
               )}
             </div>
           </div>
         </div>
+        
+        {/* Contracts Section */}
+        <div className="mb-8 rounded-xl border border-zinc-200 p-6 shadow-sm dark:bg-zinc-800">
+          <h2 className="mb-6 text-xl font-bold dark:text-white">
+            Contracts ({contracts.length})
+          </h2>
+          {contracts.length > 0 ? (
+            <div className="space-y-4">
+              {contracts.map((contract) => (
+                <div key={contract.id} className="border border-zinc-200 dark:border-zinc-700 rounded-lg p-4 hover:border-zinc-300 dark:hover:border-zinc-600 transition-colors">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-lg font-semibold dark:text-white">Contract #{contract.id}</h3>
+                    <div className="flex gap-2">
+                      <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getStatusBadgeStyle(contract.status)}`}>
+                        {contract.status || 'pending'}
+                      </span>
+                      <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
+                        contract.payment_status === 'Paid' 
+                          ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                          : 'bg-orange-500/20 text-orange-400 border border-orange-500/30'
+                      }`}>
+                        {contract.payment_status}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-4">
+                    <div>
+                      <p className="text-zinc-600 dark:text-zinc-400">Amount</p>
+                      <p className="dark:text-white font-medium">{formatCurrency(contract.amount_of_money)}</p>
+                    </div>
+                    <div>
+                      <p className="text-zinc-600 dark:text-zinc-400">Coins</p>
+                      <p className="dark:text-white font-medium">{formatCoins(contract.amount_of_coins)}</p>
+                    </div>
+                    <div>
+                      <p className="text-zinc-600 dark:text-zinc-400">Rate</p>
+                      <p className="dark:text-white font-medium">{formatCoinRate(contract.coin_rate)}</p>
+                    </div>
+                    <div>
+                      <p className="text-zinc-600 dark:text-zinc-400">Investment Date</p>
+                      <p className="dark:text-white font-medium">{new Date(contract.investment_date).toLocaleDateString()}</p>
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                      Created: {new Date(contract.created_at).toLocaleDateString()}
+                    </span>
+                    <Link
+                      href={`/dashboard/contracts/${contract.id}`}
+                      className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30 transition-colors"
+                    >
+                      <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      View Details
+                    </Link>
+                  </div>
 
-        {/* Investment Details */}
-        <div className="mb-8 grid gap-6 lg:grid-cols-2">
-          {/* Notes Section */}
-          <div className="rounded-xl border border-zinc-200 p-6 shadow-sm dark:bg-zinc-800">
-            <h2 className="mb-4 text-xl font-bold dark:text-white">
-              Investment Notes
-            </h2>
-            {isEditing ? (
-              <textarea
-                value={editedInvestor.notes || ""}
-                onChange={(e) => handleInputChange("notes", e.target.value)}
-                rows={4}
-                className="text-white w-full rounded-lg border border-zinc-200 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-700 dark:text-white"
-                placeholder="Enter notes about this investor..."
-              />
-            ) : (
-              <p className="text-zinc-700 dark:text-zinc-300">
-                {displayInvestor.notes || "No notes available for this investor."}
-              </p>
-            )}
-          </div>
+                  {/* Contract Documents */}
+                  {contract.documents && contract.documents.length > 0 && (
+                    <div className="border-t border-zinc-200 dark:border-zinc-700 pt-4 mt-4">
+                      <h4 className="text-sm font-semibold dark:text-white mb-3 flex items-center">
+                        <svg className="w-4 h-4 mr-2 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                        </svg>
+                        Documents ({contract.documents.length})
+                      </h4>
+                      <div className="space-y-2">
+                        {contract.documents.map((doc: any) => (
+                          <div key={doc.id} className="flex items-center justify-between bg-zinc-100 dark:bg-zinc-800 px-3 py-2 rounded border border-zinc-200 dark:border-zinc-600">
+                            <div className="flex items-center">
+                              <svg className="w-4 h-4 text-zinc-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                              </svg>
+                              <div>
+                                <p className="dark:text-white text-xs font-medium">{doc.document_name}</p>
+                                <p className="text-zinc-600 dark:text-zinc-400 text-xs">
+                                  {new Date(doc.uploaded_at).toLocaleDateString()}
+                                </p>
+                              </div>
+                            </div>
+                            <a
+                              href={getDocumentUrl(doc.document_url)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 flex items-center text-xs px-2 py-1 bg-blue-500/10 rounded transition-colors"
+                            >
+                              <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                              </svg>
+                              Download
+                            </a>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-8 text-zinc-500 dark:text-zinc-400">
+              <svg className="mx-auto h-12 w-12 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <p className="mt-2">No contracts found for this investor.</p>
+              <p className="text-xs">Click "Add Contract" to create the first contract.</p>
+            </div>
+          )}
+        </div>
+        
+        {/* Investment Requests Section */}
+        <InvestmentRequestsTable 
+          title="Investment Requests" 
+          investorId={parseInt(resolvedParams.id)}
+          className="mb-8"
+        />
 
-          {/* Account Settings */}
-          <div className="rounded-xl border border-zinc-200 p-6 shadow-sm dark:bg-zinc-800">
+        {/* Referrals Section */}
+        <ReferralsTable 
+          title="Referrals" 
+          investorId={parseInt(resolvedParams.id)}
+          className="mb-8"
+        />
+
+        {/* Account Settings */}
+        <div className="mb-8 rounded-xl border border-zinc-200 p-6 shadow-sm dark:bg-zinc-800">
             <h2 className="mb-4 text-xl font-bold dark:text-white">
               Account Settings
             </h2>
@@ -748,15 +729,14 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
               </div>
             </div>
           </div>
-        </div>
 
         {/* Password Change Modal */}
         {showPasswordModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-            <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-zinc-900 p-6 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
               <h3 className="text-2xl font-bold dark:text-white">Change Password</h3>
               <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-                Set a new password for {investor.full_name}
+                Set a new password for {investor?.full_name}
               </p>
 
               <div className="mt-6 space-y-4">
@@ -811,122 +791,7 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
                     setPasswordError("");
                   }}
                   disabled={changingPassword}
-                  className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-3 font-semibold transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white dark:hover:bg-zinc-700"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Add Document Modal */}
-        {showAddDocumentModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-            <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
-              <h3 className="text-2xl font-bold dark:text-white">Add Document</h3>
-              <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-                Add a document for {investor.full_name}
-              </p>
-
-              {/* Upload Method Tabs */}
-              <div className="mt-6 flex rounded-lg border border-zinc-300 dark:border-zinc-700">
-                <button
-                  onClick={() => setUploadMethod('file')}
-                  className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-                    uploadMethod === 'file'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-zinc-50 text-zinc-700 hover:bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
-                  } rounded-l-lg`}
-                >
-                  Upload File
-                </button>
-                <button
-                  onClick={() => setUploadMethod('url')}
-                  className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-                    uploadMethod === 'url'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-zinc-50 text-zinc-700 hover:bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
-                  } rounded-r-lg`}
-                >
-                  Enter URL
-                </button>
-              </div>
-
-              <div className="mt-6 space-y-4">
-                {uploadMethod === 'file' ? (
-                  <div>
-                    <label htmlFor="fileUpload" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                      Select File
-                    </label>
-                    <div className="mt-1">
-                      <input
-                        type="file"
-                        id="fileUpload"
-                        onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-                        className="block w-full text-sm text-zinc-900 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:text-zinc-300 dark:file:bg-blue-900/30 dark:file:text-blue-400"
-                        accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.xls,.xlsx"
-                      />
-                      {selectedFile && (
-                        <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
-                          Selected: {selectedFile.name} ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div>
-                      <label htmlFor="documentName" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                        Document Name
-                      </label>
-                      <input
-                        type="text"
-                        id="documentName"
-                        value={newDocumentName}
-                        onChange={(e) => setNewDocumentName(e.target.value)}
-                        className="mt-1 block w-full rounded-lg border border-zinc-300 px-4 py-3 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
-                        placeholder="e.g., Investment Contract"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="documentUrl" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                        Document URL
-                      </label>
-                      <input
-                        type="url"
-                        id="documentUrl"
-                        value={newDocumentUrl}
-                        onChange={(e) => setNewDocumentUrl(e.target.value)}
-                        className="mt-1 block w-full rounded-lg border border-zinc-300 px-4 py-3 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
-                        placeholder="https://example.com/document.pdf"
-                      />
-                      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                        Enter the URL where the document is hosted (Google Drive, Dropbox, etc.)
-                      </p>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className="mt-6 flex gap-3">
-                <button
-                  onClick={handleAddDocument}
-                  disabled={addingDocument || uploading}
-                  className="flex-1 rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {uploading ? 'Uploading...' : addingDocument ? 'Adding...' : 'Add Document'}
-                </button>
-                <button
-                  onClick={() => {
-                    setShowAddDocumentModal(false);
-                    setNewDocumentName('');
-                    setNewDocumentUrl('');
-                    setSelectedFile(null);
-                    setUploadMethod('file');
-                  }}
-                  disabled={addingDocument || uploading}
-                  className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-3 font-semibold transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white dark:hover:bg-zinc-700"
+                  className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-3 font-semibold transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 text-zinc-500"
                 >
                   Cancel
                 </button>
@@ -946,11 +811,28 @@ export default function InvestorDetailPage({ params }: { params: Promise<{ id: s
                   </svg>
                 </div>
                 <h3 className="mt-4 text-center text-lg font-semibold text-zinc-900 dark:text-white">
-                  Delete Investor
+                  Delete Investor & All Related Data
                 </h3>
                 <p className="mt-2 text-center text-sm text-zinc-600 dark:text-zinc-400">
-                  Are you sure you want to delete {investor?.full_name}? This action cannot be undone and will permanently remove all investor data and documents.
+                  Are you sure you want to delete <strong>{investor?.full_name}</strong>? This action cannot be undone and will permanently remove:
                 </p>
+                <div className="mt-4 text-left text-sm text-zinc-600 dark:text-zinc-400">
+                  <ul className="list-disc list-inside space-y-1">
+                    <li>✗ Investor profile and account</li>
+                    <li>✗ All contracts and related documents</li>
+                    <li>✗ All referrals and referrer codes</li>
+                    <li>✗ All investment requests</li>
+                    <li>✗ All TCF form submissions</li>
+                    <li>✗ All uploaded documents</li>
+                    <li>✗ All newsletter history</li>
+                    <li>✗ User login credentials</li>
+                  </ul>
+                </div>
+                <div className="mt-4 rounded-lg bg-red-50 dark:bg-red-900/20 p-3">
+                  <p className="text-center text-sm font-medium text-red-800 dark:text-red-400">
+                    ⚠️ This will completely remove all traces of this investor from the system
+                  </p>
+                </div>
               </div>
 
               <div className="mt-6 flex gap-3">

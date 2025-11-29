@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
 
 // Export the base URL for direct fetch calls
 export const getApiUrl = (endpoint: string) => `${API_URL}${endpoint}`;

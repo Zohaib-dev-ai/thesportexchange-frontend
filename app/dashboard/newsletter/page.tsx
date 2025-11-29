@@ -2,9 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
-import Image from "next/image";
-import { isAuthenticated, getUserEmail, clearAuthData } from "../../lib/auth";
+import AdminHeader from "../../components/AdminHeader";
+import { isAuthenticated, getUserEmail } from "../../lib/auth";
 import { getApiUrl, getDocumentUrl } from "../../lib/api";
 
 interface NewsletterAttachment {
@@ -22,6 +21,8 @@ interface Newsletter {
   recipient_count: number;
   attachment_count: number;
   attachments?: NewsletterAttachment[];
+  recipient_emails?: string[];
+  recipient_statuses?: { email: string; full_name: string; status: string }[];
 }
 
 export default function NewsletterPage() {
@@ -38,22 +39,33 @@ export default function NewsletterPage() {
   const [newsletters, setNewsletters] = useState<Newsletter[]>([]);
   const [loading, setLoading] = useState(false);
   const [investors, setInvestors] = useState<any[]>([]);
+  const [contracts, setContracts] = useState<any[]>([]);
+  const [recipientMode, setRecipientMode] = useState<"all" | "new" | "pending" | "signed" | "cancelled" | "manual">("all");
+  const [selectedInvestors, setSelectedInvestors] = useState<number[]>([]);
+  const [showInvestorList, setShowInvestorList] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const investorsPerPage = 10;
+  const [historyFilter, setHistoryFilter] = useState<"all" | "new" | "pending" | "signed" | "cancelled">("all");
+  const [newInvestors, setNewInvestors] = useState<any[]>([]);
   const router = useRouter();
 
   useEffect(() => {
     setIsMounted(true);
     
     if (!isAuthenticated()) {
-      router.push("/login");
+      router.push("/login-admin");
       return;
     }
 
     const email = getUserEmail();
     setUserEmail(email || "User");
     
-    // Fetch investors and newsletter history
+    // Fetch investors, contracts and newsletter history
     fetchInvestors();
+    fetchContracts();
     fetchNewsletters();
+    fetchNewInvestors();
   }, [router]);
 
   const fetchInvestors = async () => {
@@ -65,6 +77,30 @@ export default function NewsletterPage() {
       }
     } catch (error) {
       console.error('Failed to fetch investors:', error);
+    }
+  };
+
+  const fetchContracts = async () => {
+    try {
+      const response = await fetch(getApiUrl('/api/contracts'));
+      const data = await response.json();
+      if (data.success) {
+        setContracts(data.data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch contracts:', error);
+    }
+  };
+
+  const fetchNewInvestors = async () => {
+    try {
+      const response = await fetch(getApiUrl('/api/investors/new/recipients'));
+      const data = await response.json();
+      if (data.success) {
+        setNewInvestors(data.data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch new investors:', error);
     }
   };
 
@@ -81,11 +117,6 @@ export default function NewsletterPage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleLogout = () => {
-    clearAuthData();
-    router.push("/login");
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -111,9 +142,43 @@ export default function NewsletterPage() {
       return;
     }
 
-    if (investors.length === 0) {
-      setErrorMessage("No investors found to send newsletter to");
-      return;
+    // Get recipient IDs based on selected mode
+    let recipientIds: number[] = [];
+    let filteredInvestors: any[] = [];
+
+    if (recipientMode === "manual") {
+      if (selectedInvestors.length === 0) {
+        setErrorMessage("Please select at least one investor");
+        return;
+      }
+      recipientIds = selectedInvestors;
+      filteredInvestors = investors.filter(inv => selectedInvestors.includes(inv.id));
+    } else if (recipientMode === "all") {
+      recipientIds = investors.map(inv => inv.id);
+      filteredInvestors = investors;
+    } else {
+      // Filter by contract status (not investor status)
+      const statusMap: { [key: string]: string } = {
+        "pending": "pending",
+        "signed": "signed", 
+        "cancelled": "cancelled"
+      };
+      
+      if (recipientMode === "new") {
+        filteredInvestors = newInvestors;
+        recipientIds = filteredInvestors.map(inv => inv.id);
+      } else {
+        // Filter investors who have contracts with the specified status
+        const contractsWithStatus = contracts.filter(contract => contract.status === statusMap[recipientMode]);
+        const investorIds = contractsWithStatus.map(contract => contract.investor_id);
+        filteredInvestors = investors.filter(inv => investorIds.includes(inv.id));
+        recipientIds = filteredInvestors.map(inv => inv.id);
+      }
+      
+      if (recipientIds.length === 0) {
+        setErrorMessage(`No investors found with contracts having "${recipientMode}" status`);
+        return;
+      }
     }
 
     setIsSending(true);
@@ -143,9 +208,6 @@ export default function NewsletterPage() {
           }
         }
       }
-
-      // Send newsletter to all investors
-      const recipientIds = investors.map(inv => inv.id);
       
       const response = await fetch(getApiUrl('/api/newsletter/send'), {
         method: 'POST',
@@ -157,7 +219,7 @@ export default function NewsletterPage() {
           message,
           recipients: recipientIds,
           attachments: uploadedAttachments,
-          sent_by: 1, // Admin user ID
+          sent_by: null, // No user system yet
         }),
       });
 
@@ -167,10 +229,13 @@ export default function NewsletterPage() {
         throw new Error(data.error || 'Failed to send newsletter');
       }
       
-      setSuccessMessage(`Newsletter sent successfully to ${investors.length} investor${investors.length > 1 ? 's' : ''}!${attachments.length > 0 ? ` (with ${attachments.length} attachment${attachments.length > 1 ? 's' : ''})` : ''}`);
+      setSuccessMessage(`Newsletter sent successfully to ${recipientIds.length} investor${recipientIds.length > 1 ? 's' : ''}!${attachments.length > 0 ? ` (with ${attachments.length} attachment${attachments.length > 1 ? 's' : ''})` : ''}`);
       setSubject("");
       setMessage("");
       setAttachments([]);
+      setSelectedInvestors([]);
+      setRecipientMode("all");
+      setShowInvestorList(false);
       
       // Refresh newsletter history
       fetchNewsletters();
@@ -183,6 +248,98 @@ export default function NewsletterPage() {
     } finally {
       setIsSending(false);
     }
+  };
+
+  const toggleInvestorSelection = (investorId: number) => {
+    setSelectedInvestors(prev =>
+      prev.includes(investorId)
+        ? prev.filter(id => id !== investorId)
+        : [...prev, investorId]
+    );
+  };
+
+  const getFilteredInvestors = () => {
+    if (recipientMode === "all" || recipientMode === "manual") {
+      return investors;
+    }
+    if (recipientMode === "new") {
+      return newInvestors;
+    }
+    const statusMap: { [key: string]: string } = {
+      "pending": "pending",
+      "signed": "signed",
+      "cancelled": "cancelled"
+    };
+    // Filter investors who have contracts with the specified status
+    const contractsWithStatus = contracts.filter(contract => contract.status === statusMap[recipientMode]);
+    const investorIds = contractsWithStatus.map(contract => contract.investor_id);
+    return investors.filter(inv => investorIds.includes(inv.id));
+  };
+
+  const getRecipientCount = () => {
+    if (recipientMode === "manual") {
+      return selectedInvestors.length;
+    }
+    return getFilteredInvestors()?.length || 0;
+  };
+
+  const getSearchFilteredInvestors = () => {
+    if (!searchQuery.trim()) return investors;
+    
+    const query = searchQuery.toLowerCase();
+    // Optimized search - only searches visible fields
+    return investors.filter(inv => {
+      const fullName = `${inv.full_name || ''} ${inv.last_name || ''}`.toLowerCase();
+      const email = (inv.email || '').toLowerCase();
+      
+      // Get contract status for this investor
+      const investorContract = contracts.find(contract => contract.investor_id === inv.id);
+      const contractStatus = (investorContract?.status || 'pending').toLowerCase();
+      
+      return fullName.includes(query) || email.includes(query) || contractStatus.includes(query);
+    });
+  };
+
+  const getPaginatedInvestors = () => {
+    const filtered = getSearchFilteredInvestors();
+    const startIndex = (currentPage - 1) * investorsPerPage;
+    const endIndex = startIndex + investorsPerPage;
+    return filtered.slice(startIndex, endIndex);
+  };
+
+  const getTotalPages = () => {
+    const filtered = getSearchFilteredInvestors();
+    return Math.ceil(filtered.length / investorsPerPage);
+  };
+
+  const getFilteredNewsletters = () => {
+    if (historyFilter === "all") return newsletters;
+    
+    if (historyFilter === "new") {
+      // Filter newsletters that were sent to new investors (investors who never received emails)
+      const newInvestorEmails = newInvestors.map(inv => inv.email);
+      return newsletters.filter(newsletter => {
+        // Check if any recipient of this newsletter is a new investor
+        return newsletter.recipient_emails?.some((email: string) => 
+          newInvestorEmails.includes(email)
+        );
+      });
+    }
+    
+    // For other history filters, show all newsletters
+    // Future enhancement: filter based on recipient contract status if needed
+    return newsletters;
+  };
+
+  const getStatusCount = (status: string) => {
+    const statusMap: { [key: string]: string } = {
+      "Pending": "pending",
+      "Signed": "signed",
+      "Cancelled": "cancelled"
+    };
+    const contractsWithStatus = contracts.filter(contract => contract.status === statusMap[status]);
+    const investorIds = contractsWithStatus.map(contract => contract.investor_id);
+    return investors.filter(inv => investorIds.includes(inv.id)).length;
   };
 
   const formatNewsletterDate = (dateString: string) => {
@@ -202,49 +359,7 @@ export default function NewsletterPage() {
 
   return (
     <div className="min-h-screen">
-      {/* Header */}
-      <header className="border-b border-zinc-200 dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-6">
-            <Link href="/dashboard">
-              <Image 
-                src="/images/logo.svg" 
-                alt="The Sport Exchange" 
-                width={130} 
-                height={40}
-                priority
-                className="cursor-pointer"
-              />
-            </Link>
-            
-          </div>
-          <div className="flex items-center gap-4">
-            <nav className="flex gap-4">
-              <Link
-                href="/dashboard"
-                className="rounded-lg bg-zinc-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-600 dark:bg-zinc-700 dark:text-white dark:hover:bg-zinc-600"
-              >
-                Dashboard
-              </Link>
-              <span className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white dark:bg-white dark:text-zinc-900">
-                Newsletter
-              </span>
-              <Link
-                href="/dashboard/add-investor"
-                className="rounded-lg bg-zinc-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-600 dark:bg-zinc-700 dark:text-white dark:hover:bg-zinc-600"
-              >
-                Add Investor
-              </Link>
-            </nav>
-            <button
-              onClick={handleLogout}
-              className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-      </header>
+      <AdminHeader />
 
       {/* Main Content */}
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -291,9 +406,237 @@ export default function NewsletterPage() {
 
         {/* Send Newsletter Tab */}
         {activeTab === "send" && (
-        <div className="max-w-4xl">
+        <div className="max-full">
         <div className="rounded-xl border border-zinc-200 p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Recipient Mode Selection */}
+            <div>
+              <label className="block text-sm font-medium dark:text-zinc-300 mb-3">
+                Select Recipients
+              </label>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecipientMode("all");
+                    setShowInvestorList(false);
+                    setSelectedInvestors([]);
+                  }}
+                  className={`px-4 py-3 rounded-lg border-2 font-medium transition-colors ${
+                    recipientMode === "all"
+                      ? "border-blue-600 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400"
+                      : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+                  }`}
+                >
+                  All
+                  <span className="block text-xs mt-1 opacity-70">({investors.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecipientMode("new");
+                    setShowInvestorList(false);
+                    setSelectedInvestors([]);
+                  }}
+                  className={`px-4 py-3 rounded-lg border-2 font-medium transition-colors ${
+                    recipientMode === "new"
+                      ? "border-indigo-600 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-400"
+                      : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+                  }`}
+                >
+                  New
+                  <span className="block text-xs mt-1 opacity-70">({newInvestors.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecipientMode("pending");
+                    setShowInvestorList(false);
+                    setSelectedInvestors([]);
+                  }}
+                  className={`px-4 py-3 rounded-lg border-2 font-medium transition-colors ${
+                    recipientMode === "pending"
+                      ? "border-yellow-600 bg-yellow-50 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400"
+                      : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+                  }`}
+                >
+                  Pending Contracts
+                  <span className="block text-xs mt-1 opacity-70">
+                    ({getStatusCount("Pending")})
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecipientMode("signed");
+                    setShowInvestorList(false);
+                    setSelectedInvestors([]);
+                  }}
+                  className={`px-4 py-3 rounded-lg border-2 font-medium transition-colors ${
+                    recipientMode === "signed"
+                      ? "border-blue-600 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400"
+                      : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+                  }`}
+                >
+                  Signed Contracts
+                  <span className="block text-xs mt-1 opacity-70">
+                    ({getStatusCount("Signed")})
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecipientMode("cancelled");
+                    setShowInvestorList(false);
+                    setSelectedInvestors([]);
+                  }}
+                  className={`px-4 py-3 rounded-lg border-2 font-medium transition-colors ${
+                    recipientMode === "cancelled"
+                      ? "border-red-600 bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400"
+                      : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+                  }`}
+                >
+                  Cancelled Contracts
+                  <span className="block text-xs mt-1 opacity-70">
+                    ({getStatusCount("Cancelled")})
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecipientMode("manual");
+                    setShowInvestorList(true);
+                    setSelectedInvestors([]);
+                  }}
+                  className={`px-4 py-3 rounded-lg border-2 font-medium transition-colors ${
+                    recipientMode === "manual"
+                      ? "border-purple-600 bg-purple-50 text-purple-700 dark:bg-purple-900/20 dark:text-purple-400"
+                      : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+                  }`}
+                >
+                  Manual
+                  <span className="block text-xs mt-1 opacity-70">Select</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Manual Investor Selection */}
+            {showInvestorList && recipientMode === "manual" && (
+              <div className="border border-zinc-200 rounded-lg p-4 dark:border-zinc-700">
+                <div className="flex items-center justify-between mb-3">
+                  <label className="text-sm font-medium dark:text-zinc-300">
+                    Select Investors ({selectedInvestors.length} selected of {investors.length} total)
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedInvestors(getSearchFilteredInvestors().map(inv => inv.id))}
+                      className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+                      title={searchQuery ? `Select all ${getSearchFilteredInvestors().length} filtered results` : `Select all ${investors.length} investors`}
+                    >
+                      Select All {searchQuery ? 'Filtered' : ''} ({searchQuery ? getSearchFilteredInvestors().length : investors.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedInvestors([])}
+                      className="text-xs px-3 py-1 bg-zinc-200 text-zinc-700 rounded hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-300"
+                    >
+                      Clear All
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Search Bar */}
+                <div className="mb-3">
+                  <input
+                    type="text"
+                    placeholder="Search by name, email, or contract status..."
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="w-full px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+                  />
+                  {searchQuery && (
+                    <p className="text-xs text-zinc-500 mt-1 dark:text-zinc-400">
+                      Found {getSearchFilteredInvestors().length} investor(s) - Showing page {currentPage} of {getTotalPages()}
+                    </p>
+                  )}
+                  {!searchQuery && investors.length > 100 && (
+                    <p className="text-xs text-blue-600 mt-1 dark:text-blue-400">
+                      💡 Tip: Use search to quickly find investors from {investors.length} total
+                    </p>
+                  )}
+                </div>
+
+                <div className="max-h-96 overflow-y-auto space-y-2 mb-3">
+                  {getPaginatedInvestors().length > 0 ? (
+                    getPaginatedInvestors().map(investor => {
+                      // Get contract status for this investor
+                      const investorContract = contracts.find(contract => contract.investor_id === investor.id);
+                      const contractStatus = investorContract?.status || 'pending';
+                      
+                      return (
+                    <label
+                      key={investor.id}
+                      className="flex items-center gap-3 p-3 rounded-lg border border-zinc-200 hover:bg-zinc-50 cursor-pointer dark:border-zinc-700 dark:hover:bg-zinc-800"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedInvestors.includes(investor.id)}
+                        onChange={() => toggleInvestorSelection(investor.id)}
+                        className="w-4 h-4 text-blue-600 rounded"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm dark:text-white">
+                          {investor.email}
+                        </div>
+                      </div>
+                      <span className={`text-xs px-2 py-1 rounded ${
+                        contractStatus === 'signed' ? 'bg-green-100 text-green-700 dark:bg-green-900/20 dark:text-green-400' :
+                        contractStatus === 'cancelled' ? 'bg-red-100 text-red-700 dark:bg-red-900/20 dark:text-red-400' :
+                        contractStatus === 'contract sent' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400' :
+                        'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400'
+                      }`}>
+                        {contractStatus}
+                      </span>
+                    </label>
+                    )})
+                  ) : (
+                    <div className="text-center py-8 text-zinc-500 dark:text-zinc-400">
+                      No investors found matching "{searchQuery}"
+                    </div>
+                  )}
+                </div>
+
+                {/* Pagination */}
+                {getTotalPages() > 1 && (
+                  <div className="flex items-center justify-between pt-3 border-t border-zinc-200 dark:border-zinc-700">
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                      className="text-xs px-3 py-1 bg-zinc-100 text-zinc-700 rounded hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-300"
+                    >
+                      Previous
+                    </button>
+                    <span className="text-xs text-zinc-600 dark:text-zinc-400">
+                      Page {currentPage} of {getTotalPages()} ({getSearchFilteredInvestors().length} total)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage(prev => Math.min(getTotalPages(), prev + 1))}
+                      disabled={currentPage === getTotalPages()}
+                      className="text-xs px-3 py-1 bg-zinc-100 text-zinc-700 rounded hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-300"
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Subject */}
             <div>
               <label
@@ -451,10 +794,10 @@ export default function NewsletterPage() {
             {/* Submit Button */}
             <button
               type="submit"
-              disabled={isSending || investors.length === 0}
+              disabled={isSending || getRecipientCount() === 0}
               className="w-full rounded-lg bg-blue-600 px-6 py-3 font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isSending ? "Sending..." : `Send Newsletter to ${investors.length} Investor${investors.length !== 1 ? 's' : ''}`}
+              {isSending ? "Sending..." : `Send Newsletter to ${getRecipientCount()} Investor${getRecipientCount() !== 1 ? 's' : ''}`}
             </button>
           </form>
         </div>
@@ -464,14 +807,74 @@ export default function NewsletterPage() {
         {/* History Tab */}
         {activeTab === "history" && (
         <div>
+          {/* Status Filter Buttons */}
+          <div className="mb-6 flex flex-wrap gap-3">
+            <button
+              onClick={() => setHistoryFilter("all")}
+              className={`px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
+                historyFilter === "all"
+                  ? "border-blue-600 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400"
+                  : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+              }`}
+            >
+              All Newsletters
+              <span className="ml-2 text-xs opacity-70">({newsletters.length})</span>
+            </button>
+            <button
+              onClick={() => setHistoryFilter("new")}
+              className={`px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
+                historyFilter === "new"
+                  ? "border-indigo-600 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-400"
+                  : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+              }`}
+            >
+              New Recipients
+              <span className="ml-2 text-xs opacity-70">({newInvestors.length} investors)</span>
+            </button>
+            <button
+              onClick={() => setHistoryFilter("pending")}
+              className={`px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
+                historyFilter === "pending"
+                  ? "border-yellow-600 bg-yellow-50 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400"
+                  : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+              }`}
+            >
+              Pending Recipients
+              <span className="ml-2 text-xs opacity-70">({getStatusCount("Pending")} investors)</span>
+            </button>
+            <button
+              onClick={() => setHistoryFilter("signed")}
+              className={`px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
+                historyFilter === "signed"
+                  ? "border-blue-600 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400"
+                  : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+              }`}
+            >
+              Signed Recipients
+              <span className="ml-2 text-xs opacity-70">({getStatusCount("Signed")} investors)</span>
+            </button>
+
+            <button
+              onClick={() => setHistoryFilter("cancelled")}
+              className={`px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
+                historyFilter === "cancelled"
+                  ? "border-red-600 bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400"
+                  : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-700 dark:hover:border-zinc-600"
+              }`}
+            >
+              Cancelled Recipients
+              <span className="ml-2 text-xs opacity-70">({getStatusCount("Cancelled")} investors)</span>
+            </button>
+          </div>
+
           {loading ? (
             <div className="rounded-xl border border-zinc-200 p-12 text-center dark:border-zinc-800 dark:bg-zinc-900">
               <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-zinc-200 border-t-blue-600 dark:border-zinc-700 dark:border-t-blue-400"></div>
               <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">Loading newsletters...</p>
             </div>
-          ) : newsletters.length > 0 ? (
+          ) : getFilteredNewsletters().length > 0 ? (
           <div className="grid gap-6 lg:grid-cols-2">
-            {newsletters.map((newsletter) => (
+            {getFilteredNewsletters().map((newsletter) => (
               <div
                 key={newsletter.id}
                 className="rounded-xl border border-zinc-200 p-6 shadow-sm transition-shadow hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900"

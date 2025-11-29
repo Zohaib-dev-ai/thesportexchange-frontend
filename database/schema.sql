@@ -24,6 +24,7 @@ CREATE TABLE investors (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
   full_name VARCHAR(255) NOT NULL,
+  last_name VARCHAR(255),
   email VARCHAR(255) NOT NULL UNIQUE,
   phone VARCHAR(50),
   address TEXT,
@@ -35,9 +36,9 @@ CREATE TABLE investors (
   amount_of_coins DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
   share_percentage DECIMAL(5, 2) DEFAULT 0.00,
   investment_date DATE,
-  status ENUM('Pending', 'Signed', 'Paid', 'Cancelled') NOT NULL DEFAULT 'Pending',
+  status ENUM('Pending', 'Signed', 'Cancelled') NOT NULL DEFAULT 'Pending',
+  payment ENUM('Paid', 'Unpaid') NOT NULL DEFAULT 'Unpaid',
   notes TEXT,
-  copy_of_contract VARCHAR(500),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -47,21 +48,46 @@ CREATE TABLE investors (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
--- Table: investor_documents
--- Purpose: Store multiple documents per investor
+-- Table: contracts
+-- Purpose: Store individual investment contracts for each investor
 -- ============================================
-CREATE TABLE investor_documents (
+CREATE TABLE contracts (
   id INT AUTO_INCREMENT PRIMARY KEY,
   investor_id INT NOT NULL,
+  amount_of_money DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
+  amount_of_coins DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
+  coin_rate DECIMAL(10, 4) NOT NULL DEFAULT 0.00,
+  payment_status ENUM('Paid', 'Unpaid') NOT NULL DEFAULT 'Unpaid',
+  contract_status ENUM('Draft', 'Active', 'Completed', 'Cancelled') NOT NULL DEFAULT 'Draft',
+  status ENUM('pending', 'contract sent', 'signed', 'cancelled') NOT NULL DEFAULT 'pending',
+  investment_date DATE NOT NULL,
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (investor_id) REFERENCES investors(id) ON DELETE CASCADE,
+  INDEX idx_investor_id (investor_id),
+  INDEX idx_payment_status (payment_status),
+  INDEX idx_contract_status (contract_status),
+  INDEX idx_status (status),
+  INDEX idx_investment_date (investment_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================
+-- Table: contract_documents
+-- Purpose: Store multiple documents per contract (moved from investor_documents)
+-- ============================================
+CREATE TABLE contract_documents (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  contract_id INT NOT NULL,
   document_name VARCHAR(255) NOT NULL,
   document_url VARCHAR(500) NOT NULL,
   document_type VARCHAR(100),
   file_size INT,
   uploaded_by INT,
   uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (investor_id) REFERENCES investors(id) ON DELETE CASCADE,
+  FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
   FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL,
-  INDEX idx_investor_id (investor_id),
+  INDEX idx_contract_id (contract_id),
   INDEX idx_uploaded_at (uploaded_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -159,7 +185,7 @@ INSERT INTO investors (
   25000.00, 
   2.50, 
   '2024-01-15', 
-  'Paid'
+  'Signed'
 );
 
 -- ============================================
@@ -189,3 +215,33 @@ INSERT INTO investors (
 -- SELECT status, COUNT(*) as count 
 -- FROM investors 
 -- GROUP BY status;
+
+-- ============================================
+-- Table: investment_requests
+-- Purpose: Store investment requests from investors
+-- ============================================
+CREATE TABLE investment_requests (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    investor_id INT NOT NULL,
+    investment_amount DECIMAL(10, 2) NOT NULL,
+    current_rate DECIMAL(8, 5) NOT NULL,
+    calculated_coins DECIMAL(15, 0) NOT NULL,
+    discount_percentage INT DEFAULT 20,
+    status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    -- Foreign key constraint
+    FOREIGN KEY (investor_id) REFERENCES investors(id) ON DELETE CASCADE,
+    
+    -- Indexes for better performance
+    INDEX idx_investor_id (investor_id),
+    INDEX idx_status (status),
+    INDEX idx_created_at (created_at),
+    
+    -- Constraints
+    CONSTRAINT chk_investment_amount CHECK (investment_amount >= 100),
+    CONSTRAINT chk_current_rate CHECK (current_rate > 0),
+    CONSTRAINT chk_calculated_coins CHECK (calculated_coins >= 0),
+    CONSTRAINT chk_discount_percentage CHECK (discount_percentage >= 0 AND discount_percentage <= 100)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

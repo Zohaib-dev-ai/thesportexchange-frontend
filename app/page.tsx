@@ -11,12 +11,8 @@ export default function Home() {
   useEffect(() => {
     setIsMounted(true);
     
-    // Check authentication using auth service
-    if (isAuthenticated()) {
-      router.push("/dashboard");
-    } else {
-      router.push("/login");
-    }
+    // Redirect to investor login page
+    router.push("/investor-login");
   }, [router]);
 
   if (!isMounted) {

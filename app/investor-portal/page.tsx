@@ -3,6 +3,12 @@
 import { useState, useEffect } from 'react';
 import { getUserId } from '@/app/lib/auth';
 import { getApiUrl, getDocumentUrl } from '@/app/lib/api';
+import { DashboardCharts } from '../components/DashboardCharts';
+import AddInvestmentComponent from '../components/AddInvestmentComponent';
+import InvestmentRequestsComponent from '../components/InvestmentRequestsComponent';
+import ReferralBox from '../components/ReferralBox';
+import InvestorReferrals from '../components/InvestorReferrals';
+import Link from 'next/link';
 
 interface Investor {
   id: number;
@@ -14,8 +20,22 @@ interface Investor {
   amount_of_coins: number;
   investment_date: string;
   status: string;
+  payment?: string;
   notes: string;
   copy_of_contract?: string;
+  documents?: any[];
+}
+
+interface Contract {
+  id: number;
+  investor_id: number;
+  amount_of_money: number;
+  amount_of_coins: number;
+  coin_rate: number;
+  payment_status: string;
+  status: string;
+  investment_date: string;
+  created_at: string;
   documents?: any[];
 }
 
@@ -27,14 +47,43 @@ interface Newsletter {
   attachments?: any[];
 }
 
+interface Settings {
+  id: number;
+  coin_rate: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export default function InvestorPortalPage() {
   const [isMounted, setIsMounted] = useState(false);
   const [investor, setInvestor] = useState<Investor | null>(null);
+  const [contracts, setContracts] = useState<Contract[]>([]);
   const [newsletters, setNewsletters] = useState<Newsletter[]>([]);
+  const [currentRate, setCurrentRate] = useState<string>('0');
   const [loading, setLoading] = useState(true);
+  const [loadingContracts, setLoadingContracts] = useState(true);
   const [loadingNewsletters, setLoadingNewsletters] = useState(true);
   const [error, setError] = useState('');
   const [selectedNewsletter, setSelectedNewsletter] = useState<Newsletter | null>(null);
+  const [refreshInvestmentRequests, setRefreshInvestmentRequests] = useState(0);
+
+  const formatCoins = (value: string | number) => {
+    if (!value && value !== 0) return '0';
+    const numericValue = typeof value === 'string' ? parseFloat(value) : value;
+    return isNaN(numericValue) ? '0' : numericValue.toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    });
+  };
+
+  const formatCurrency = (value: string | number) => {
+    if (!value && value !== 0) return '$0';
+    const numericValue = typeof value === 'string' ? parseFloat(value) : value;
+    return isNaN(numericValue) ? '$0' : `$${numericValue.toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2
+    })}`;
+  };
 
   useEffect(() => {
     setIsMounted(true);
@@ -43,7 +92,9 @@ export default function InvestorPortalPage() {
   useEffect(() => {
     if (isMounted) {
       fetchInvestorData();
+      fetchContracts();
       fetchNewsletters();
+      fetchCurrentRate();
     }
   }, [isMounted]);
 
@@ -71,6 +122,24 @@ export default function InvestorPortalPage() {
     }
   };
 
+  const fetchContracts = async () => {
+    try {
+      const investorId = getUserId();
+      if (!investorId) return;
+
+      const response = await fetch(getApiUrl(`/api/contracts/investor/${investorId}`));
+      const data = await response.json();
+      
+      if (data.success) {
+        setContracts(data.data.slice(0, 3)); // Show only first 3 contracts
+      }
+    } catch (err) {
+      console.error('Failed to fetch contracts:', err);
+    } finally {
+      setLoadingContracts(false);
+    }
+  };
+
   const fetchNewsletters = async () => {
     try {
       setLoadingNewsletters(true);
@@ -88,6 +157,26 @@ export default function InvestorPortalPage() {
     }
   };
 
+  const fetchCurrentRate = async () => {
+    try {
+      const response = await fetch(getApiUrl('/api/settings'));
+      const data = await response.json();
+      
+      if (data.success && data.data) {
+        // Backend returns settings as key-value object: { current_rate: { value: "5", ... } }
+        const currentRateData = data.data.current_rate;
+        setCurrentRate(currentRateData?.value || '0');
+      }
+    } catch (err) {
+      console.error('Failed to fetch current rate:', err);
+    }
+  };
+
+  const handleInvestmentRequestSubmitted = () => {
+    // Trigger a refresh of the investment requests component
+    setRefreshInvestmentRequests(prev => prev + 1);
+  };
+
   const formatNewsletterDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('en-US', {
@@ -97,6 +186,21 @@ export default function InvestorPortalPage() {
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const getStatusBadgeStyle = (status: string) => {
+    switch (status?.toLowerCase()) {
+      case 'pending':
+        return 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30';
+      case 'contract sent':
+        return 'bg-blue-500/20 text-blue-400 border border-blue-500/30';
+      case 'signed':
+        return 'bg-green-500/20 text-green-400 border border-green-500/30';
+      case 'cancelled':
+        return 'bg-red-500/20 text-red-400 border border-red-500/30';
+      default:
+        return 'bg-gray-500/20 text-gray-400 border border-gray-500/30';
+    }
   };
 
   if (!isMounted || loading) {
@@ -130,141 +234,205 @@ export default function InvestorPortalPage() {
     <div className="space-y-6">
       {/* Welcome Header */}
       <div className="bg-gradient-to-r from-blue-600 to-blue-800 rounded-lg p-8">
-        <h1 className="text-3xl font-bold text-white mb-2">
-          Welcome, {investor.full_name} {investor.last_name}
-        </h1>
-        <p className="text-blue-100">
-          View your investment details and stay updated with newsletters
-        </p>
-      </div>
-
-      {/* Investment Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-[#111111] border border-gray-800 rounded-lg p-6">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-medium text-gray-400">Investment Amount</h3>
-            <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
+        <div className="flex items-center justify-between sm-block">
+          <div>
+            <h1 className="text-3xl font-bold text-white mb-2">
+              Welcome, {investor.full_name} {investor.last_name}
+            </h1>
+            <p className="text-blue-100">
+              View your investment details and stay updated with newsletters
+            </p>
           </div>
-          <p className="text-2xl font-bold text-white">${investor.amount_of_money?.toLocaleString() || '0'}</p>
-        </div>
-
-        <div className="bg-[#111111] border border-gray-800 rounded-lg p-6">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-medium text-gray-400">Coin Holdings</h3>
-            <svg className="w-5 h-5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-            </svg>
+          <div className="flex items-center gap-4 sm-block">
+            <AddInvestmentComponent 
+              currentRate={currentRate}
+              onRequestSubmitted={fetchInvestorData}
+              onInvestmentRequestSubmitted={handleInvestmentRequestSubmitted}
+            />
+            <Link 
+              href="/investor-portal/personal-info"
+              className="flex items-center bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-colors"
+            >
+              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+              Personal Info
+            </Link>
           </div>
-          <p className="text-2xl font-bold text-white">{investor.amount_of_coins?.toLocaleString() || '0'}</p>
-        </div>
-
-        <div className="bg-[#111111] border border-gray-800 rounded-lg p-6">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-medium text-gray-400">Status</h3>
-            <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <p className="text-2xl font-bold text-white">{investor.status}</p>
         </div>
       </div>
 
-      {/* Personal Information */}
-      <div className="bg-[#111111] border border-gray-800 rounded-lg p-6">
-        <h2 className="text-xl font-bold text-white mb-6 flex items-center">
-          <svg className="w-6 h-6 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-          </svg>
-          Personal Information
-        </h2>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-400 mb-2">Full Name</label>
-            <p className="text-white bg-[#1a1a1a] px-4 py-3 rounded-lg">{investor.full_name}</p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-400 mb-2">Last Name</label>
-            <p className="text-white bg-[#1a1a1a] px-4 py-3 rounded-lg">{investor.last_name}</p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-400 mb-2">Email</label>
-            <p className="text-white bg-[#1a1a1a] px-4 py-3 rounded-lg">{investor.email}</p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-400 mb-2">Phone</label>
-            <p className="text-white bg-[#1a1a1a] px-4 py-3 rounded-lg">{investor.phone}</p>
-          </div>
-        </div>
-      </div>
+      {/* Dashboard Charts */}
+      <DashboardCharts />
 
       {/* Investment Details */}
       <div className="bg-[#111111] border border-gray-800 rounded-lg p-6">
         <h2 className="text-xl font-bold text-white mb-6 flex items-center">
           <svg className="w-6 h-6 mr-2 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          Investment Details
+          Investment Summary
         </h2>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-400 mb-2">Investment Date</label>
-            <p className="text-white bg-[#1a1a1a] px-4 py-3 rounded-lg">
-              {investor.investment_date ? new Date(investor.investment_date).toLocaleDateString('en-US', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric'
-              }) : 'N/A'}
-            </p>
+          <div className="bg-gradient-to-br from-green-500/10 to-green-600/10 border border-green-500/20 rounded-lg p-6">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-green-400">Amount of Money</h3>
+              <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <p className="text-3xl font-bold text-white">{formatCurrency(investor.amount_of_money)}</p>
+            <p className="text-xs text-green-400/70 mt-1">Total investment</p>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-400 mb-2">Amount Invested</label>
-            <p className="text-white bg-[#1a1a1a] px-4 py-3 rounded-lg">
-              ${investor.amount_of_money?.toLocaleString() || '0'}
-            </p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-400 mb-2">TSE Coins</label>
-            <p className="text-white bg-[#1a1a1a] px-4 py-3 rounded-lg">
-              {investor.amount_of_coins?.toLocaleString() || '0'}
-            </p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-400 mb-2">Status</label>
-            <p className="text-white bg-[#1a1a1a] px-4 py-3 rounded-lg">
-              <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
-                investor.status === 'Paid' 
-                  ? 'bg-green-500/20 text-green-400' 
-                  : investor.status === 'Signed'
-                  ? 'bg-blue-500/20 text-blue-400'
-                  : investor.status === 'Pending'
-                  ? 'bg-yellow-500/20 text-yellow-400'
-                  : 'bg-red-500/20 text-red-400'
-              }`}>
-                {investor.status}
-              </span>
-            </p>
+          <div className="bg-gradient-to-br from-purple-500/10 to-purple-600/10 border border-purple-500/20 rounded-lg p-6">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-purple-400">Amount of Coins</h3>
+              <svg className="w-5 h-5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+              </svg>
+            </div>
+            <p className="text-3xl font-bold text-white">{formatCoins(investor.amount_of_coins)}</p>
+            <p className="text-xs text-purple-400/70 mt-1">TSE tokens</p>
           </div>
         </div>
+      </div>
 
-        {investor.notes && (
-          <div className="mt-6">
-            <label className="block text-sm font-medium text-gray-400 mb-2">Notes</label>
-            <p className="text-white bg-[#1a1a1a] px-4 py-3 rounded-lg whitespace-pre-wrap">
-              {investor.notes}
-            </p>
+      {/* Contracts Section */}
+      <div className="bg-[#111111] border border-gray-800 rounded-lg p-6">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-white flex items-center">
+            <svg className="w-6 h-6 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            My Contracts ({contracts.length})
+          </h2>
+          {contracts.length > 0 && (
+            <Link 
+              href="/investor-portal/contracts"
+              className="text-blue-400 hover:text-blue-300 text-sm flex items-center"
+            >
+              View All
+              <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </Link>
+          )}
+        </div>
+
+        {loadingContracts ? (
+          <div className="text-center py-8">
+            <div className="h-6 w-6 animate-spin rounded-full border-4 border-gray-700 border-t-white mx-auto"></div>
+            <p className="text-gray-400 mt-2">Loading contracts...</p>
+          </div>
+        ) : contracts.length === 0 ? (
+          <div className="text-center py-8 text-gray-400">
+            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <p className="mt-2">No contracts found.</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {contracts.map((contract) => (
+              <div key={contract.id} className="bg-[#1a1a1a] border border-gray-700 rounded-lg p-4 hover:border-gray-600 transition-colors">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-lg font-semibold text-white">Contract #{contract.id}</h3>
+                  <div className="flex gap-2">
+                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getStatusBadgeStyle(contract.status)}`}>
+                      {contract.status || 'pending'}
+                    </span>
+                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
+                      contract.payment_status === 'Paid' 
+                        ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                        : 'bg-orange-500/20 text-orange-400 border border-orange-500/30'
+                    }`}>
+                      {contract.payment_status}
+                    </span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                  <div>
+                    <p className="text-gray-400">Amount</p>
+                    <p className="text-white font-medium">{formatCurrency(contract.amount_of_money)}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-400">Coins</p>
+                    <p className="text-white font-medium">{formatCoins(contract.amount_of_coins)}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-400">Investment Date</p>
+                    <p className="text-white font-medium">{new Date(contract.investment_date).toLocaleDateString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-400">Created</p>
+                    <p className="text-white font-medium">{new Date(contract.created_at).toLocaleDateString()}</p>
+                  </div>
+                </div>
+
+                {/* Contract Documents */}
+                {contract.documents && contract.documents.length > 0 && (
+                  <div className="border-t border-gray-700 pt-4 mt-4">
+                    <h4 className="text-sm font-semibold text-white mb-3 flex items-center">
+                      <svg className="w-4 h-4 mr-2 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                      </svg>
+                      Documents ({contract.documents.length})
+                    </h4>
+                    <div className="space-y-2">
+                      {contract.documents.slice(0, 2).map((doc: any) => (
+                        <div key={doc.id} className="flex items-center justify-between bg-[#0d0d0d] px-3 py-2 rounded border border-gray-600/50">
+                          <div className="flex items-center">
+                            <svg className="w-4 h-4 text-gray-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                            </svg>
+                            <div>
+                              <p className="text-white text-xs font-medium">{doc.document_name}</p>
+                              <p className="text-gray-400 text-xs">
+                                {new Date(doc.uploaded_at).toLocaleDateString()}
+                              </p>
+                            </div>
+                          </div>
+                          <a
+                            href={getDocumentUrl(doc.document_url)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-400 hover:text-blue-300 flex items-center text-xs px-2 py-1 bg-blue-500/10 rounded transition-colors"
+                          >
+                            <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            Download
+                          </a>
+                        </div>
+                      ))}
+                      {contract.documents.length > 2 && (
+                        <p className="text-xs text-gray-400 text-center py-1">
+                          +{contract.documents.length - 2} more documents
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </div>
+
+      {/* Investment Requests Section */}
+      <InvestmentRequestsComponent 
+        investorId={investor.id} 
+        refreshTrigger={refreshInvestmentRequests}
+        currentRate={currentRate}
+      />
+
+      {/* Referral Program Section */}
+      <ReferralBox />
+
+      {/* My Referrals Section */}
+      <InvestorReferrals investorId={investor.id} />
 
       {/* Documents Section */}
       {((investor.documents && investor.documents.length > 0) || investor.copy_of_contract) && (
@@ -335,26 +503,6 @@ export default function InvestorPortalPage() {
           </div>
         </div>
       )}
-
-
-      {/* Help Section 
-      <div className="bg-blue-600/10 border border-blue-600/30 rounded-lg p-6">
-        <div className="flex items-start">
-          <svg className="w-6 h-6 text-blue-500 mr-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <div>
-            <h3 className="text-white font-semibold mb-1">Need Assistance?</h3>
-            <p className="text-gray-300 text-sm mb-2">
-              If you have any questions about your investment or need to update your information, please contact our support team.
-            </p>
-            <a href="mailto:support@thesportexchange.com" className="text-blue-400 hover:text-blue-300 text-sm font-medium">
-              support@thesportexchange.com
-            </a>
-          </div>
-        </div>
-      </div>*/}
-
     </div>
   );
 }
